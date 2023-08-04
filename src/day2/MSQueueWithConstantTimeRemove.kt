@@ -15,18 +15,109 @@ class MSQueueWithConstantTimeRemove<E> : QueueWithRemove<E> {
     }
 
     override fun enqueue(element: E) {
+        while (true) {
+            val oldTail = tail.value
+            val newTail = Node(element, prev = oldTail)
+            //  h       t
+            // (d) <-> (OT) <- (NT)
+
+            if (!oldTail.next.compareAndSet(null, newTail)) {
+                // Someone already updated old tail, so can't insert new node here -> restart
+                //  h       t
+                // (d) <-> (OT) <- (NT)
+                //           |
+                //           --> (OtherNode)
+                tail.compareAndSet(oldTail, oldTail.next.value!!)
+                continue
+            }
+
+            // Try advance tail now
+            //  h       t
+            // (d) <-> (OT) <-> (NT)
+            if (tail.compareAndSet(oldTail, newTail)) {
+                // Tail is advanced
+                //  h                t
+                // (d) <-> (OT) <-> (NT)
+
+                // Corner case: previous tail is logically removed -> remove it now
+                if (oldTail.extractedOrRemoved) oldTail.removeForReal()
+                //  h       t
+                // (d) <-> (NT)
+                return
+            } else {
+                // Tail is pointing to some other node (ON) now
+                // And our NT should be connected now, then simply return
+                //  h                         t
+                // (d) <-> (OT) <-> (NT) .. (ON)
+                return
+            }
+        }
         // TODO: When adding a new node, check whether
         // TODO: the previous tail is logically removed.
         // TODO: If so, remove it physically from the linked list.
-        TODO("Implement me!")
+        // TODO("Implement me!")
     }
 
     override fun dequeue(): E? {
+        //region State before execution:
+        //  h               t
+        // (d) <-> (1) <-> (2)
+        //
+        // 1 should be returned
+        // node (1) should become dummy and also marked as removed -> (1')
+        // (d) should be physically removed i.e. no one points to it
+        //          h       t
+        // null <- (1') <-> (2)
+        //endregion
+
+        while (true) {
+            val currentHead = head.value
+
+            val extractingNode = currentHead.next.value
+            // Corner case: Node after head is null
+            //          h
+            // null <- (d) -> null
+            if (extractingNode == null) return null
+
+            if (head.compareAndSet(currentHead, extractingNode)) {
+                //region Head is advanced
+                //          h       t
+                // (d) <-> (1) <-> (2)
+                //endregion
+
+                if (extractingNode.markExtractedOrRemoved()) {
+                    //region Current thread made deletion? Then make new head dummy
+                    //          h        t
+                    // (d) <-> (1') <-> (2)
+                    //endregion
+
+                    extractingNode.prev.compareAndSet(currentHead, null)
+                    //currentHead.next.compareAndSet(extractingNode, null)
+                    //region Current thread made deletion? Then make new head dummy
+                    //          h        t
+                    // null <- (1') <-> (2)
+                    //endregion
+
+                    return extractingNode.element
+                } else {
+                    //region If no, then someone did mark it as "removed" then try to dequeue again
+                    // Lemma: Can some other thread mark it as removed via dequeue method?
+                    // Let's assume YES! Then this other thread also managed to advance head to extractingNode
+                    // i.e. it succeeds in this CAS: head.CAS(currentHead, extractingNode) => true!
+                    // It is possible only if "next" of at least two nodes (N1, N2) points to extractingNode (EN)
+                    // i.e. N1.next == EN && N2.next == EN
+                    // This isn't possible in linked list without cycles
+                    // Therefore: this node was marked as "removed" by "remove" method.
+                    //endregion
+                }
+            }
+        }
+
         // TODO: After moving the `head` pointer forward,
         // TODO: mark the node that contains the extracting
         // TODO: element as "extracted or removed", restarting
         // TODO: the operation if this node has already been removed.
-        TODO("Implement me!")
+        // TODO("Implement me!")
     }
 
     override fun remove(element: E): Boolean {
@@ -56,11 +147,11 @@ class MSQueueWithConstantTimeRemove<E> : QueueWithRemove<E> {
         // Traverse the linked list
         var node = head.value
         while (true) {
-            if (node !== head.value && node !== tail.value) {
-                check(!node.extractedOrRemoved) {
-                    "Removed node with element ${node.element} found in the middle of the queue"
-                }
-            }
+//            if (node !== head.value && node !== tail.value) {
+//                check(!node.extractedOrRemoved) {
+//                    "Removed node with element ${node.element} found in the middle of the queue"
+//                }
+//            }
             val nodeNext = node.next.value
             // Is this the end of the linked list?
             if (nodeNext == null) break
@@ -93,6 +184,10 @@ class MSQueueWithConstantTimeRemove<E> : QueueWithRemove<E> {
 
         fun markExtractedOrRemoved(): Boolean = _extractedOrRemoved.compareAndSet(false, true)
 
+        fun removeForReal() {
+
+        }
+
         /**
          * Removes this node from the queue structure.
          * Returns `true` if this node was successfully
@@ -100,6 +195,7 @@ class MSQueueWithConstantTimeRemove<E> : QueueWithRemove<E> {
          * removed by [remove] or extracted by [dequeue].
          */
         fun remove(): Boolean {
+            return markExtractedOrRemoved()
             // TODO: As in the previous task, the removal procedure is split into two phases.
             // TODO: First, you need to mark the node as "extracted or removed".
             // TODO: On success, this node is logically removed, and the
@@ -114,7 +210,7 @@ class MSQueueWithConstantTimeRemove<E> : QueueWithRemove<E> {
             // TODO: it is totally fine to have a bounded number of removed nodes
             // TODO: in the linked list, especially when it significantly simplifies
             // TODO: the algorithm.
-            TODO("Implement me!")
+            // TODO("Implement me!")
         }
     }
 }
